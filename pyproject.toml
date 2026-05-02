@@ -1,0 +1,36 @@
+[project]
+name = "srf-punctuation"
+version = "0.1.0"
+description = "语音输入法专用的标点预测模型"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "torch>=2.0.0",
+    "lightning>=2.6.0",
+    "torchmetrics>=1.0.0",
+    "onnx>=1.15.0",
+    "onnxruntime>=1.16.0",
+    "onnxscript",
+    "rich",
+    "tensorboard"
+]
+
+[project.scripts]
+train-punctuation = "scripts.train:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/srf_punctuation"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv]
+dev-dependencies = [
+    "pytest>=7.0.0",
+    "ruff>=0.1.0",
+]
+
+[[tool.uv.index]]
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
+default = true
