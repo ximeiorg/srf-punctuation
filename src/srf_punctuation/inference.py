@@ -1,11 +1,75 @@
 import json
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
+import numpy as np
 import torch
 
 from .config import Config
 from .models import PunctuationPredictor
+
+
+class ONNXInference:
+    def __init__(
+        self,
+        onnx_path: str,
+        vocab_path: str,
+        config: Config = None,
+    ):
+        self.config = config or Config()
+        self.vocab: Dict[str, int] = {}
+        self._load_vocab(vocab_path)
+        self._load_onnx(onnx_path)
+
+    def _load_vocab(self, vocab_path: str) -> None:
+        with open(vocab_path, "r", encoding="utf-8") as f:
+            self.vocab = json.load(f)
+
+    def _load_onnx(self, onnx_path: str) -> None:
+        try:
+            import onnxruntime as ort
+        except ImportError:
+            raise ImportError("需要安装 onnxruntime: pip install onnxruntime")
+        
+        self.session = ort.InferenceSession(onnx_path, providers=["CPUExecutionProvider"])
+
+    def text_to_ids(self, text: str) -> List[int]:
+        unk_id = self.vocab.get("<UNK>", 1)
+        return [self.vocab.get(char, unk_id) for char in text]
+
+    def predict(self, text: str) -> str:
+        char_ids = self.text_to_ids(text)
+        if len(char_ids) > self.config.model.max_seq_len:
+            char_ids = char_ids[: self.config.model.max_seq_len]
+
+        input_ids = np.array([char_ids], dtype=np.int64)
+        attention_mask = np.ones((1, len(char_ids)), dtype=np.int64)
+
+        outputs = self.session.run(
+            None,
+            {
+                "input_ids": input_ids,
+                "attention_mask": attention_mask,
+            }
+        )
+
+        logits = outputs[0]
+        preds = logits.argmax(axis=-1)[0].tolist()
+
+        punctuation_tokens = self.config.punctuation_tokens
+        result = []
+        for i, char in enumerate(text[: len(preds)]):
+            result.append(char)
+            label = preds[i]
+            for name, idx in self.config.punctuation_map.items():
+                if idx == label and name != "O":
+                    result.append(punctuation_tokens[name])
+                    break
+
+        return "".join(result)
+
+    def predict_batch(self, texts: List[str]) -> List[str]:
+        return [self.predict(text) for text in texts]
 
 
 class PunctuationInference:
@@ -86,3 +150,10 @@ def load_inference(
     vocab_path: str = "data/vocab.json",
 ) -> PunctuationInference:
     return PunctuationInference(checkpoint_path, vocab_path)
+
+
+def load_onnx_inference(
+    onnx_path: str = "onnx/punctuation_int8.onnx",
+    vocab_path: str = "data/vocab.json",
+) -> ONNXInference:
+    return ONNXInference(onnx_path, vocab_path)
