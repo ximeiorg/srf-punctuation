@@ -1,4 +1,5 @@
 import json
+import random
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -12,10 +13,35 @@ class PunctuationDataset(Dataset):
         data_path: str,
         max_seq_len: int = 256,
         pad_id: int = 0,
+        vocab: Dict[str, int] = None,
+        enable_augmentation: bool = False,
+        aug_keep_original: float = 0.3,
+        aug_remove_punct: float = 0.4,
+        aug_replace_punct: float = 0.2,
+        aug_add_noise: float = 0.1,
+        punctuation_tokens: Dict[str, str] = None,
+        chinese_punctuation: List[str] = None,
     ):
         self.data_path = Path(data_path)
         self.max_seq_len = max_seq_len
         self.pad_id = pad_id
+        self.vocab = vocab or {}
+        self.enable_augmentation = enable_augmentation
+        self.aug_keep_original = aug_keep_original
+        self.aug_remove_punct = aug_remove_punct
+        self.aug_replace_punct = aug_replace_punct
+        self.aug_add_noise = aug_add_noise
+        self.punctuation_tokens = punctuation_tokens or {
+            "O": "",
+            "COMMA": "，",
+            "PERIOD": "。",
+            "QUESTION": "？",
+            "EXCLAMATION": "！",
+        }
+        self.chinese_punctuation = chinese_punctuation or [
+            "，", "。", "？", "！", "、", "；", "：", """, """, """, """, "（", "）", "【", "】", "《", "》"
+        ]
+        self.label_to_type = {0: "O", 1: "COMMA", 2: "PERIOD", 3: "QUESTION", 4: "EXCLAMATION"}
         self.line_offsets: List[int] = []
         self._build_index()
 
@@ -46,6 +72,62 @@ class PunctuationDataset(Dataset):
             pickle.dump(self.line_offsets, f)
         print(f"Indexed {len(self.line_offsets)} samples, cached to {index_path}")
 
+    def _augment_text(self, clean_text: str, labels: List[int]) -> str:
+        if not self.enable_augmentation:
+            return clean_text
+        
+        rand = random.random()
+        keep_prob = self.aug_keep_original
+        remove_prob = self.aug_remove_punct
+        replace_prob = self.aug_replace_punct
+        
+        if rand < keep_prob:
+            augmented = []
+            for i, char in enumerate(clean_text):
+                augmented.append(char)
+                if labels[i] > 0:
+                    punct = self.punctuation_tokens[self.label_to_type[labels[i]]]
+                    augmented.append(punct)
+            return "".join(augmented)
+        
+        elif rand < keep_prob + remove_prob:
+            augmented = []
+            for i, char in enumerate(clean_text):
+                augmented.append(char)
+                if labels[i] > 0 and random.random() > 0.5:
+                    punct = self.punctuation_tokens[self.label_to_type[labels[i]]]
+                    augmented.append(punct)
+            return "".join(augmented)
+        
+        elif rand < keep_prob + remove_prob + replace_prob:
+            augmented = []
+            punct_types = ["COMMA", "PERIOD", "QUESTION", "EXCLAMATION"]
+            for i, char in enumerate(clean_text):
+                augmented.append(char)
+                if labels[i] > 0:
+                    if random.random() < 0.5:
+                        correct_type = self.label_to_type[labels[i]]
+                        wrong_types = [t for t in punct_types if t != correct_type]
+                        wrong_type = random.choice(wrong_types)
+                        punct = self.punctuation_tokens[wrong_type]
+                    else:
+                        punct = self.punctuation_tokens[self.label_to_type[labels[i]]]
+                    augmented.append(punct)
+            return "".join(augmented)
+        
+        else:
+            augmented = []
+            punct_types = ["COMMA", "PERIOD", "QUESTION", "EXCLAMATION"]
+            for i, char in enumerate(clean_text):
+                if random.random() < 0.1:
+                    wrong_punct = self.punctuation_tokens[random.choice(punct_types)]
+                    augmented.append(wrong_punct)
+                augmented.append(char)
+                if labels[i] > 0 and random.random() < 0.7:
+                    punct = self.punctuation_tokens[self.label_to_type[labels[i]]]
+                    augmented.append(punct)
+            return "".join(augmented)
+
     def __len__(self) -> int:
         return len(self.line_offsets)
 
@@ -54,20 +136,26 @@ class PunctuationDataset(Dataset):
             f.seek(self.line_offsets[idx])
             line = f.readline().decode("utf-8")
             item = json.loads(line.strip())
-        char_ids = item["char_ids"]
+        
+        clean_text = item["text"]
         labels = item["labels"]
-
+        
+        augmented_text = self._augment_text(clean_text, labels)
+        
+        clean_chars = [c for c in augmented_text if c not in self.chinese_punctuation]
+        char_ids = [self.vocab.get(c, self.vocab.get("<UNK>", 1)) for c in clean_chars]
+        
         seq_len = min(len(char_ids), self.max_seq_len)
         char_ids = char_ids[:seq_len]
         labels = labels[:seq_len]
-
+        
         padding_length = self.max_seq_len - len(char_ids)
         if padding_length > 0:
             char_ids = char_ids + [self.pad_id] * padding_length
             labels = labels + [-100] * padding_length
-
+        
         attention_mask = [1] * seq_len + [0] * padding_length
-
+        
         return {
             "input_ids": torch.tensor(char_ids, dtype=torch.long),
             "labels": torch.tensor(labels, dtype=torch.long),
@@ -79,36 +167,70 @@ class PunctuationDataModule:
     def __init__(
         self,
         data_dir: str,
+        vocab: Dict[str, int] = None,
         max_seq_len: int = 256,
         batch_size: int = 32,
         num_workers: int = 4,
         pad_id: int = 0,
+        enable_augmentation: bool = False,
+        aug_keep_original: float = 0.3,
+        aug_remove_punct: float = 0.4,
+        aug_replace_punct: float = 0.2,
+        aug_add_noise: float = 0.1,
+        punctuation_tokens: Dict[str, str] = None,
+        chinese_punctuation: List[str] = None,
     ):
         self.data_dir = Path(data_dir)
+        self.vocab = vocab or {}
         self.max_seq_len = max_seq_len
         self.batch_size = batch_size
         self.num_workers = num_workers
         self.pad_id = pad_id
+        self.enable_augmentation = enable_augmentation
+        self.aug_keep_original = aug_keep_original
+        self.aug_remove_punct = aug_remove_punct
+        self.aug_replace_punct = aug_replace_punct
+        self.aug_add_noise = aug_add_noise
+        self.punctuation_tokens = punctuation_tokens
+        self.chinese_punctuation = chinese_punctuation
 
         self.train_dataset: Optional[PunctuationDataset] = None
         self.val_dataset: Optional[PunctuationDataset] = None
         self.test_dataset: Optional[PunctuationDataset] = None
 
     def setup(self) -> None:
+        aug_params = {
+            "vocab": self.vocab,
+            "enable_augmentation": self.enable_augmentation,
+            "aug_keep_original": self.aug_keep_original,
+            "aug_remove_punct": self.aug_remove_punct,
+            "aug_replace_punct": self.aug_replace_punct,
+            "aug_add_noise": self.aug_add_noise,
+            "punctuation_tokens": self.punctuation_tokens,
+            "chinese_punctuation": self.chinese_punctuation,
+        }
+        
         self.train_dataset = PunctuationDataset(
             self.data_dir / "train.jsonl",
             max_seq_len=self.max_seq_len,
             pad_id=self.pad_id,
+            **aug_params,
         )
         self.val_dataset = PunctuationDataset(
             self.data_dir / "val.jsonl",
             max_seq_len=self.max_seq_len,
             pad_id=self.pad_id,
+            vocab=self.vocab,
+            punctuation_tokens=self.punctuation_tokens,
+            chinese_punctuation=self.chinese_punctuation,
         )
         self.test_dataset = PunctuationDataset(
             self.data_dir / "test.jsonl",
             max_seq_len=self.max_seq_len,
             pad_id=self.pad_id,
+            vocab=self.vocab,
+            punctuation_tokens=self.punctuation_tokens,
+            chinese_punctuation=self.chinese_punctuation,
         )
 
     def train_dataloader(self) -> torch.utils.data.DataLoader:

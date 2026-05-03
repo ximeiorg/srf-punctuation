@@ -26,6 +26,11 @@ class DataConfig:
     val_ratio: float = 0.1
     test_ratio: float = 0.1
     max_samples: int|None = None
+    enable_augmentation: bool = True
+    aug_keep_original: float = 0.3
+    aug_remove_punct: float = 0.4
+    aug_replace_punct: float = 0.2
+    aug_add_noise: float = 0.1
 
 
 @dataclass
@@ -68,5 +73,5 @@ class Config:
     )
 
     chinese_punctuation: List[str] = field(
-        default_factory=lambda: ["，", "。", "？", "！", "、", "；", "：", """, """, """, """, "（", "）", "【", "】", "《", "》"]
+        default_factory=lambda: ["，", "。", "？", "！", "、", "；", "：", """, """, """, """, "（", "）", "【", "】", "《", "》", ",", "!", "?", ".", ";", ":", "(", ")", "[", "]"]
     )

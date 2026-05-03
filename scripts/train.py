@@ -1,4 +1,5 @@
 import argparse
+import json
 from pathlib import Path
 
 import torch
@@ -12,7 +13,6 @@ from srf_punctuation.models import PunctuationPredictor
 from srf_punctuation.trainers import PunctuationTrainer
 
 
-# Load default config for argument defaults
 _DEFAULT_CONFIG = Config()
 
 
@@ -114,11 +114,23 @@ def main():
             "--data-dir", config.data.processed_data_dir,
         ], check=True)
 
+    vocab_path = data_dir / config.data.vocab_file
+    with open(vocab_path, "r", encoding="utf-8") as f:
+        vocab = json.load(f)
+
     data_module = PunctuationDataModule(
         data_dir=config.data.processed_data_dir,
+        vocab=vocab,
         max_seq_len=config.model.max_seq_len,
         batch_size=config.training.batch_size,
         num_workers=0,
+        enable_augmentation=config.data.enable_augmentation,
+        aug_keep_original=config.data.aug_keep_original,
+        aug_remove_punct=config.data.aug_remove_punct,
+        aug_replace_punct=config.data.aug_replace_punct,
+        aug_add_noise=config.data.aug_add_noise,
+        punctuation_tokens=config.punctuation_tokens,
+        chinese_punctuation=config.chinese_punctuation,
     )
     data_module.setup()
 

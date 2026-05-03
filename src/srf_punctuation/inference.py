@@ -33,14 +33,20 @@ class ONNXInference:
         
         self.session = ort.InferenceSession(onnx_path, providers=["CPUExecutionProvider"])
 
+    def _clean_text(self, text: str) -> str:
+        return "".join([c for c in text if c not in self.config.chinese_punctuation])
+
     def text_to_ids(self, text: str) -> List[int]:
+        clean_text = self._clean_text(text)
         unk_id = self.vocab.get("<UNK>", 1)
-        return [self.vocab.get(char, unk_id) for char in text]
+        return [self.vocab.get(char, unk_id) for char in clean_text]
 
     def predict(self, text: str) -> str:
+        clean_text = self._clean_text(text)
         char_ids = self.text_to_ids(text)
         if len(char_ids) > self.config.model.max_seq_len:
             char_ids = char_ids[: self.config.model.max_seq_len]
+            clean_text = clean_text[: self.config.model.max_seq_len]
 
         input_ids = np.array([char_ids], dtype=np.int64)
         attention_mask = np.ones((1, len(char_ids)), dtype=np.int64)
@@ -58,7 +64,7 @@ class ONNXInference:
 
         punctuation_tokens = self.config.punctuation_tokens
         result = []
-        for i, char in enumerate(text[: len(preds)]):
+        for i, char in enumerate(clean_text[: len(preds)]):
             result.append(char)
             label = preds[i]
             for name, idx in self.config.punctuation_map.items():
@@ -113,13 +119,19 @@ class PunctuationInference:
             self.model.load_state_dict(checkpoint)
         self.model.eval()
 
+    def _clean_text(self, text: str) -> str:
+        return "".join([c for c in text if c not in self.config.chinese_punctuation])
+
     def text_to_ids(self, text: str) -> List[int]:
-        return [self.vocab.get(char, self.vocab["<UNK>"]) for char in text]
+        clean_text = self._clean_text(text)
+        return [self.vocab.get(char, self.vocab["<UNK>"]) for char in clean_text]
 
     def predict(self, text: str) -> str:
+        clean_text = self._clean_text(text)
         char_ids = self.text_to_ids(text)
         if len(char_ids) > self.config.model.max_seq_len:
             char_ids = char_ids[: self.config.model.max_seq_len]
+            clean_text = clean_text[: self.config.model.max_seq_len]
 
         input_ids = torch.tensor([char_ids], dtype=torch.long)
         attention_mask = torch.ones(1, len(char_ids), dtype=torch.long)
@@ -131,7 +143,7 @@ class PunctuationInference:
 
         punctuation_tokens = self.config.punctuation_tokens
         result = []
-        for i, char in enumerate(text[: len(preds)]):
+        for i, char in enumerate(clean_text[: len(preds)]):
             result.append(char)
             label = preds[i]
             for name, idx in self.config.punctuation_map.items():
